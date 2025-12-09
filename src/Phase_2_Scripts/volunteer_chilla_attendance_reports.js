@@ -88,22 +88,93 @@ function getTotalDays(startDate, endDate) {
 
 
 // ---------------------------------------------------------
-// DATA EXTRACTION HELPERS
+// DATA EXTRACTION HELPERS - RETURN DISPLAY TEXT
 // ---------------------------------------------------------
-function getMasjidNames(data) {
-    if (data.managedMasjids && Array.isArray(data.managedMasjids) && data.managedMasjids.length > 0) {
-        return data.managedMasjids.map(m => m.masjidName).filter(Boolean).join(", ");
+function getMasjidDisplay(data) {
+    // Check if masjidDetails is an array (trustees with multiple masjids)
+    if (data.masjidDetails && Array.isArray(data.masjidDetails) && data.masjidDetails.length > 0) {
+        const masjids = data.masjidDetails
+            .map(m => m?.masjidName)
+            .filter(name => name && name.trim() !== "");
+        
+        if (masjids.length > 1) {
+            return "multiple masjids";
+        } else if (masjids.length === 1) {
+            return masjids[0];
+        }
     }
-    return data.masjidDetails?.masjidName || data.assignedMasjid?.masjidName || "";
+    
+    // Check if masjidDetails is a single object (regular volunteers)
+    if (data.masjidDetails && typeof data.masjidDetails === 'object' && !Array.isArray(data.masjidDetails)) {
+        const masjidName = data.masjidDetails.masjidName;
+        if (masjidName && masjidName.trim() !== "") {
+            return masjidName;
+        }
+    }
+    
+    // Check managedMasjids array (alternative structure)
+    if (data.managedMasjids && Array.isArray(data.managedMasjids) && data.managedMasjids.length > 0) {
+        const masjids = data.managedMasjids
+            .map(m => m?.masjidName)
+            .filter(name => name && name.trim() !== "");
+        
+        if (masjids.length > 1) {
+            return "multiple masjids";
+        } else if (masjids.length === 1) {
+            return masjids[0];
+        }
+    }
+    
+    // Fallback to assignedMasjid
+    const fallbackMasjid = data.assignedMasjid?.masjidName || "";
+    return fallbackMasjid && fallbackMasjid.trim() !== "" ? fallbackMasjid : "";
 }
 
-function getClusterNumbers(data) {
-    if (data.managedMasjids && Array.isArray(data.managedMasjids) && data.managedMasjids.length > 0) {
-        // Get unique clusters
-        const clusters = data.managedMasjids.map(m => m.clusterNumber).filter(Boolean);
-        return [...new Set(clusters)].join(", ");
+function getClusterDisplay(data) {
+    // Check if masjidDetails is an array (trustees with multiple masjids)
+    if (data.masjidDetails && Array.isArray(data.masjidDetails) && data.masjidDetails.length > 0) {
+        const clusters = [...new Set(
+            data.masjidDetails
+                .map(m => m?.clusterNumber)
+                .filter(num => num !== null && num !== undefined && num !== "")
+        )];
+        
+        if (clusters.length > 1) {
+            return "multiple clusters";
+        } else if (clusters.length === 1) {
+            return String(clusters[0]);
+        }
     }
-    return data.masjidDetails?.clusterNumber || data.assignedMasjid?.clusterNumber || "";
+    
+    // Check if masjidDetails is a single object (regular volunteers)
+    if (data.masjidDetails && typeof data.masjidDetails === 'object' && !Array.isArray(data.masjidDetails)) {
+        const clusterNumber = data.masjidDetails.clusterNumber;
+        if (clusterNumber !== null && clusterNumber !== undefined && clusterNumber !== "") {
+            return String(clusterNumber);
+        }
+    }
+    
+    // Check managedMasjids array (alternative structure)
+    if (data.managedMasjids && Array.isArray(data.managedMasjids) && data.managedMasjids.length > 0) {
+        const clusters = [...new Set(
+            data.managedMasjids
+                .map(m => m?.clusterNumber)
+                .filter(num => num !== null && num !== undefined && num !== "")
+        )];
+        
+        if (clusters.length > 1) {
+            return "multiple clusters";
+        } else if (clusters.length === 1) {
+            return String(clusters[0]);
+        }
+    }
+    
+    // Fallback to assignedMasjid
+    const fallbackCluster = data.assignedMasjid?.clusterNumber;
+    if (fallbackCluster !== null && fallbackCluster !== undefined && fallbackCluster !== "") {
+        return String(fallbackCluster);
+    }
+    return "";
 }
 
 function isHafiz(data) {
@@ -127,26 +198,38 @@ async function fetchVolunteerUsers() {
     const snapshot = await db.collection("Users").get();
 
     const volunteerUsers = new Map();
+    let debugCount = 0;
 
     snapshot.forEach((doc) => {
         const data = doc.data();
         const userId = doc.id;
-        // const role = data.role || "";
 
-        // Include ALL users from Users collection as volunteers (matching dashboard logic)
-        // if (role.toLowerCase() === "volunteer") {
+        const masjidDisplay = getMasjidDisplay(data);
+        const clusterDisplay = getClusterDisplay(data);
+
+        // Debug logging for first 3 users with empty masjid/cluster
+        if ((masjidDisplay === "" || clusterDisplay === "") && debugCount < 3) {
+            console.log(`\n📋 DEBUG - User with empty masjid/cluster:`);
+            console.log(`   User ID: ${userId}`);
+            console.log(`   Name: ${data.name || data.displayName || "Unknown"}`);
+            console.log(`   managedMasjids:`, JSON.stringify(data.managedMasjids, null, 2));
+            console.log(`   masjidDetails:`, JSON.stringify(data.masjidDetails, null, 2));
+            console.log(`   assignedMasjid:`, JSON.stringify(data.assignedMasjid, null, 2));
+            console.log(`   Resulting masjidDisplay: "${masjidDisplay}"`);
+            console.log(`   Resulting clusterDisplay: "${clusterDisplay}"`);
+            debugCount++;
+        }
+
         volunteerUsers.set(userId, {
             userId: userId,
             name: data.name || data.displayName || "Unknown",
             email: data.email || "",
             phone: data.phone || data.phoneNumber || "",
-
             role: data.role || "volunteer",
-            masjid: getMasjidNames(data),
-            cluster: getClusterNumbers(data),
+            masjid: masjidDisplay,
+            cluster: clusterDisplay,
             isHafiz: isHafiz(data),
         });
-        // }
     });
 
     console.log(`✅ Found ${volunteerUsers.size} volunteers in Users collection`);
@@ -240,19 +323,6 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     console.log(`Required Days Range: All volunteers included`);
     console.log(`========================================\n`);
 
-    // Use ALL volunteers for each report (requested change)
-    // We are no longer filtering by total days worked range
-
-    // const filteredVolunteers = new Map();
-    // volunteerUsers.forEach((volunteer, userId) => {
-    //     const totalDays = totalDaysWorked[userId] || 0;
-    //     if (totalDays >= chilla.minDays && totalDays <= chilla.maxDays) {
-    //         filteredVolunteers.set(userId, volunteer);
-    //     }
-    // });
-
-    // console.log(`✅ Found ${filteredVolunteers.size} volunteers with ${chilla.minDays}-${chilla.maxDays} days worked`);
-
     const reportVolunteers = volunteerUsers;
     console.log(`✅ Included all ${reportVolunteers.size} volunteers in this report`);
 
@@ -278,7 +348,7 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
         });
     });
 
-    // Prepare data for Excel - using THIS period's attendance only
+    // Prepare data for Excel - ONE ROW per volunteer
     const reportData = [];
 
     reportVolunteers.forEach((volunteer, userId) => {
@@ -293,7 +363,6 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
             name: volunteer.name,
             email: volunteer.email,
             phone: volunteer.phone,
-
             masjid: volunteer.masjid,
             cluster: volunteer.cluster,
             isHafiz: volunteer.isHafiz,
@@ -307,8 +376,13 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
         });
     });
 
-    // Sort by attendance percentage (descending)
-    reportData.sort((a, b) => b.attendancePercentage - a.attendancePercentage);
+    // Sort by attendance percentage (descending), then by name
+    reportData.sort((a, b) => {
+        if (b.attendancePercentage !== a.attendancePercentage) {
+            return b.attendancePercentage - a.attendancePercentage;
+        }
+        return a.name.localeCompare(b.name);
+    });
 
     // Create Excel workbook
     const workbook = new ExcelJS.Workbook();
@@ -317,7 +391,6 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     // Define columns
     sheet.columns = [
         { header: "Volunteer User ID", key: "userId", width: 35 },
-
         { header: "Volunteer Name", key: "name", width: 25 },
         { header: "Hafiz?", key: "isHafiz", width: 10 },
         { header: "Email", key: "email", width: 30 },
@@ -346,7 +419,6 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     // Add data rows
     reportData.forEach((data) => {
         const row = sheet.addRow(data);
-
 
         // Color code based on attendance percentage
         const percentageCell = row.getCell("attendancePercentage");
@@ -429,8 +501,8 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
 
     // Generate all dates in THIS specific period only
     const allDates = [];
-    let currentDate = new Date(chilla.startDate); // Start from THIS Chilla's start
-    const endDate = new Date(chilla.endDate);     // End at THIS Chilla's end
+    let currentDate = new Date(chilla.startDate);
+    const endDate = new Date(chilla.endDate);
 
     while (currentDate <= endDate) {
         allDates.push(formatISTDate(currentDate));
@@ -467,8 +539,10 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     };
     dailyHeaderRow.alignment = { vertical: "middle", horizontal: "center" };
 
-    // Add data rows for each filtered volunteer
+    // Add data rows for each volunteer
     reportVolunteers.forEach((volunteer, userId) => {
+        const attendanceRecords = chillaAttendance[userId] || {};
+        
         const rowData = {
             volunteerName: volunteer.name,
             isHafiz: volunteer.isHafiz,
@@ -476,8 +550,6 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
             masjid: volunteer.masjid,
             cluster: volunteer.cluster,
         };
-
-        const attendanceRecords = chillaAttendance[userId] || {};
 
         // For each date, mark as Present or Absent
         allDates.forEach((date) => {
@@ -488,7 +560,6 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
         const row = dailySheet.addRow(rowData);
 
         // Color code each date cell
-
         allDates.forEach((date, index) => {
             const cellIndex = index + 6; // +6 because first 5 columns are name, hafiz, userId, masjid, cluster
             const cell = row.getCell(cellIndex);
@@ -521,7 +592,7 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     await workbook.xlsx.writeFile(outputPath);
 
     console.log(`✅ ${chilla.name} report created: ${outputPath}`);
-    console.log(`   Volunteers in this report: ${totalVolunteers}`);
+    console.log(`   Total Volunteers: ${totalVolunteers}`);
     console.log(`   Average Attendance (This Period): ${avgAttendance}%`);
     console.log(`   Total Records Taken (This Period): ${totalRecordsTaken}\n`);
 }
