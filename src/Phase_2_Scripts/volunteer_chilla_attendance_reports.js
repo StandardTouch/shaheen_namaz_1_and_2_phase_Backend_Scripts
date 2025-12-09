@@ -86,6 +86,38 @@ function getTotalDays(startDate, endDate) {
     return diffDays;
 }
 
+
+// ---------------------------------------------------------
+// DATA EXTRACTION HELPERS
+// ---------------------------------------------------------
+function getMasjidNames(data) {
+    if (data.managedMasjids && Array.isArray(data.managedMasjids) && data.managedMasjids.length > 0) {
+        return data.managedMasjids.map(m => m.masjidName).filter(Boolean).join(", ");
+    }
+    return data.masjidDetails?.masjidName || data.assignedMasjid?.masjidName || "";
+}
+
+function getClusterNumbers(data) {
+    if (data.managedMasjids && Array.isArray(data.managedMasjids) && data.managedMasjids.length > 0) {
+        // Get unique clusters
+        const clusters = data.managedMasjids.map(m => m.clusterNumber).filter(Boolean);
+        return [...new Set(clusters)].join(", ");
+    }
+    return data.masjidDetails?.clusterNumber || data.assignedMasjid?.clusterNumber || "";
+}
+
+function isHafiz(data) {
+    // Check if "hafiz" is in the name (case insensitive)
+    const name = data.name || data.displayName || "";
+    if (name.toLowerCase().includes("hafiz")) return "Yes";
+
+    // Check specific fields if they exist (based on guess work/inspection)
+    if (data.isHafiz === true || data.isHafiz === "true") return "Yes";
+    if (data.role === "hafiz") return "Yes";
+
+    return "No";
+}
+
 // ---------------------------------------------------------
 // FETCH ALL USERS AND IDENTIFY VOLUNTEERS
 // ---------------------------------------------------------
@@ -108,7 +140,11 @@ async function fetchVolunteerUsers() {
             name: data.name || data.displayName || "Unknown",
             email: data.email || "",
             phone: data.phone || data.phoneNumber || "",
-            role: data.role || "volunteer", // Default to volunteer if missing
+
+            role: data.role || "volunteer",
+            masjid: getMasjidNames(data),
+            cluster: getClusterNumbers(data),
+            isHafiz: isHafiz(data),
         });
         // }
     });
@@ -201,21 +237,26 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     console.log(`\n========================================`);
     console.log(`Generating report for: ${chilla.name}`);
     console.log(`Period: ${formatISTDate(chilla.startDate)} to ${formatISTDate(chilla.endDate)}`);
-    console.log(`Required Days Range: ${chilla.minDays}-${chilla.maxDays} total days worked`);
+    console.log(`Required Days Range: All volunteers included`);
     console.log(`========================================\n`);
 
-    // Filter volunteers who have days worked within the range
-    const filteredVolunteers = new Map();
-    volunteerUsers.forEach((volunteer, userId) => {
-        const totalDays = totalDaysWorked[userId] || 0;
-        if (totalDays >= chilla.minDays && totalDays <= chilla.maxDays) {
-            filteredVolunteers.set(userId, volunteer);
-        }
-    });
+    // Use ALL volunteers for each report (requested change)
+    // We are no longer filtering by total days worked range
 
-    console.log(`✅ Found ${filteredVolunteers.size} volunteers with ${chilla.minDays}-${chilla.maxDays} days worked`);
+    // const filteredVolunteers = new Map();
+    // volunteerUsers.forEach((volunteer, userId) => {
+    //     const totalDays = totalDaysWorked[userId] || 0;
+    //     if (totalDays >= chilla.minDays && totalDays <= chilla.maxDays) {
+    //         filteredVolunteers.set(userId, volunteer);
+    //     }
+    // });
 
-    if (filteredVolunteers.size === 0) {
+    // console.log(`✅ Found ${filteredVolunteers.size} volunteers with ${chilla.minDays}-${chilla.maxDays} days worked`);
+
+    const reportVolunteers = volunteerUsers;
+    console.log(`✅ Included all ${reportVolunteers.size} volunteers in this report`);
+
+    if (reportVolunteers.size === 0) {
         console.log(`⚠️ No volunteers found for ${chilla.name}. Skipping report generation.\n`);
         return;
     }
@@ -226,7 +267,7 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     // Filter attendance data for THIS specific Chilla period only
     const chillaAttendance = {};
     Object.entries(allVolunteerAttendance).forEach(([userId, dateRecords]) => {
-        if (!filteredVolunteers.has(userId)) return;
+        if (!reportVolunteers.has(userId)) return;
 
         chillaAttendance[userId] = {};
         Object.entries(dateRecords).forEach(([date, count]) => {
@@ -240,7 +281,7 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     // Prepare data for Excel - using THIS period's attendance only
     const reportData = [];
 
-    filteredVolunteers.forEach((volunteer, userId) => {
+    reportVolunteers.forEach((volunteer, userId) => {
         const attendanceRecords = chillaAttendance[userId] || {};
         const daysWorked = Object.keys(attendanceRecords).length;
         const totalRecordsTaken = Object.values(attendanceRecords).reduce((sum, count) => sum + count, 0);
@@ -252,6 +293,10 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
             name: volunteer.name,
             email: volunteer.email,
             phone: volunteer.phone,
+
+            masjid: volunteer.masjid,
+            cluster: volunteer.cluster,
+            isHafiz: volunteer.isHafiz,
             totalDaysInPeriod: totalDays,
             daysWorked: daysWorked,
             daysAbsent: totalDays - daysWorked,
@@ -272,9 +317,13 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     // Define columns
     sheet.columns = [
         { header: "Volunteer User ID", key: "userId", width: 35 },
+
         { header: "Volunteer Name", key: "name", width: 25 },
+        { header: "Hafiz?", key: "isHafiz", width: 10 },
         { header: "Email", key: "email", width: 30 },
         { header: "Phone", key: "phone", width: 18 },
+        { header: "Masjid", key: "masjid", width: 25 },
+        { header: "Cluster", key: "cluster", width: 10 },
         { header: "Total Days (This Period)", key: "totalDaysInPeriod", width: 20 },
         { header: "Days Worked", key: "daysWorked", width: 15 },
         { header: "Days Absent", key: "daysAbsent", width: 12 },
@@ -298,8 +347,9 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     reportData.forEach((data) => {
         const row = sheet.addRow(data);
 
+
         // Color code based on attendance percentage
-        const percentageCell = row.getCell(10);
+        const percentageCell = row.getCell("attendancePercentage");
         percentageCell.numFmt = "0.00";
 
         if (data.attendancePercentage >= 80) {
@@ -363,7 +413,7 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     summarySheet.addRow({ metric: `Volunteers in ${chilla.name} Category`, value: totalVolunteers });
     summarySheet.addRow({ metric: "Total Days in This Period", value: totalDays });
     summarySheet.addRow({ metric: "Period Covered", value: `${formatISTDate(chilla.startDate)} to ${formatISTDate(chilla.endDate)}` });
-    summarySheet.addRow({ metric: "Required Total Days Range (All Chillas)", value: `${chilla.minDays}-${chilla.maxDays}` });
+    summarySheet.addRow({ metric: "Required Total Days Range (All Chillas)", value: "All volunteers included" });
     summarySheet.addRow({ metric: "Average Attendance % (This Period)", value: parseFloat(avgAttendance) });
     summarySheet.addRow({ metric: "Total Records Taken (This Period)", value: totalRecordsTaken });
     summarySheet.addRow({ metric: "Avg Records per Volunteer", value: parseFloat(avgRecordsPerVolunteer) });
@@ -390,7 +440,10 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     // Create columns: Volunteer Name, User ID, then one column per date
     const columns = [
         { header: "Volunteer Name", key: "volunteerName", width: 25 },
+        { header: "Hafiz?", key: "isHafiz", width: 10 },
         { header: "User ID", key: "userId", width: 35 },
+        { header: "Masjid", key: "masjid", width: 25 },
+        { header: "Cluster", key: "cluster", width: 10 },
     ];
 
     // Add date columns
@@ -415,10 +468,13 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
     dailyHeaderRow.alignment = { vertical: "middle", horizontal: "center" };
 
     // Add data rows for each filtered volunteer
-    filteredVolunteers.forEach((volunteer, userId) => {
+    reportVolunteers.forEach((volunteer, userId) => {
         const rowData = {
             volunteerName: volunteer.name,
+            isHafiz: volunteer.isHafiz,
             userId: userId,
+            masjid: volunteer.masjid,
+            cluster: volunteer.cluster,
         };
 
         const attendanceRecords = chillaAttendance[userId] || {};
@@ -432,8 +488,9 @@ async function generateChillaReport(chilla, volunteerUsers, allVolunteerAttendan
         const row = dailySheet.addRow(rowData);
 
         // Color code each date cell
+
         allDates.forEach((date, index) => {
-            const cellIndex = index + 3; // +3 because first 2 columns are name and userId
+            const cellIndex = index + 6; // +6 because first 5 columns are name, hafiz, userId, masjid, cluster
             const cell = row.getCell(cellIndex);
             const recordCount = attendanceRecords[date] || 0;
 
